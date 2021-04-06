@@ -1,0 +1,117 @@
+image: php:7.2-cli
+
+stages:
+  - build
+  - deploy
+
+variables:
+  WP_THEME_PATH: web/app/themes/YOUR_THEME_NAME
+  ZIP_TEMP_FOLDER_NAME: "mesimtablet.com_DEPLOY_TMP"
+  SERVER_ROOT_WHERE_DEPLOY_FOLDER: "/home/your/www/or/whatever"
+  SERVER_ROOT_WHERE_DEPLOY_FOLDER_PROD: "/home/your/www/or"
+  SERVER: "your@server.com"
+  PORT: "5050" 
+
+# This is NOT a job and will be ignored by GitLab-CsI
+.init_ssh: &ssh_set_up 
+  before_script:
+    # SSH
+    - "which ssh-agent || ( apt-get update -y && apt-get install openssh-client -y )"
+    - eval $(ssh-agent -s)
+
+    ##
+    ## Add the SSH key stored in SSH_PRIVATE_KEY variable to the agent store
+    ## We're using tr to fix line endings which makes ed25519 keys work
+    ## without extra base64 encoding.
+    ## https://gitlab.com/gitlab-examples/ssh-private-key/issues/1#note_48526556
+    ##
+    - ssh-add <(echo "$SSH_PRIVATE_KEY") 
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    - '[[ -f /.dockerenv ]] && echo -e "Host *\n\tStrictHostKeyChecking no\n\n" > ~/.ssh/config'
+    # Allow deploy script to execute if using one
+    - chmod +x ./deploy-dev.sh
+    - chmod +x ./deploy-production.sh
+
+# This is NOT a job and will be ignored by GitLab-CsI
+.init_build: &init_build 
+  before_script:
+  # Updates
+  - curl -sL https://deb.nodesource.com/setup_10.x | bash
+  - curl -sS https://dl.yarnpkg.com/debian/pubkey.gpg | apt-key add -
+  - echo "deb https://dl.yarnpkg.com/debian/ stable main" | tee /etc/apt/sources.list.d/yarn.list
+  - apt-get update
+  - apt-get -y install yarn libpcre3-dev zlib1g-dev libbz2-dev libpng-dev libjpeg-dev nodejs git zip unzip curl rsync mariadb-client
+  - docker-php-ext-configure gd --with-png-dir=/usr --with-jpeg-dir=/usr
+  - docker-php-ext-install zip bz2 gd mysqli pdo pdo_mysql
+
+  # Composer
+  - php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');"
+  - php -r "copy('https://composer.github.io/installer.sig', 'composer-setup.sig');"
+  - php -r "if (hash_file('SHA384', 'composer-setup.php') === trim(file_get_contents('composer-setup.sig'))) { echo 'Installer verified'; } else { echo 'Installer corrupt'; unlink('composer-setup.php'); } echo PHP_EOL;"
+  - php composer-setup.php --install-dir=/usr/local/bin --filename=composer
+  - php -r "unlink('composer-setup.php');"
+  - php -r "unlink('composer-setup.sig');"
+
+  # Install dependencies
+  - npm rebuild node-sass --force
+  
+  # SSH
+  - "which ssh-agent || ( apt-get update -y && apt-get install openssh-client -y )"
+  - eval $(ssh-agent -s)
+
+  ##
+  ## Add the SSH key stored in SSH_PRIVATE_KEY variable to the agent store
+  ## We're using tr to fix line endings which makes ed25519 keys work
+  ## without extra base64 encoding.
+  ## https://gitlab.com/gitlab-examples/ssh-private-key/issues/1#note_48526556
+  ##
+  - ssh-add <(echo "$SSH_PRIVATE_KEY") 
+  - mkdir -p ~/.ssh
+  - chmod 700 ~/.ssh
+  - '[[ -f /.dockerenv ]] && echo -e "Host *\n\tStrictHostKeyChecking no\n\n" > ~/.ssh/config'
+  # Allow deploy script to execute if using one
+  - chmod +x ./deploy.sh
+
+#####################
+#### DEVELOPMENT ####
+#####################
+
+build_development:
+  stage: build
+  only:
+    - develop
+    - feature/ci-cd
+  artifacts:
+    paths:
+      - DEPLOY_TMP.zip
+    expire_in: 30 min
+  <<: *init_build
+  script:
+    # we run composer here and not on the server because we need private repositories to be accessible with our ssh key
+    - composer install --no-ansi --no-dev --no-interaction --optimize-autoloader --no-progress
+    - cd ${WP_THEME_PATH}
+    - composer install --no-ansi --no-dev --no-interaction --optimize-autoloader --no-progress
+    - yarn
+    - yarn build
+    - cd $CI_PROJECT_DIR
+    - echo "ZIP our whole folder - skipping non-production files/folders!"
+    # skip .cache-loader also or do we need it? make sure to skip hidden files, especially .git etc (huge!)
+    - zip -q -r ${ZIP_TEMP_FOLDER_NAME}.zip . -x '*node_modules*' -x '.*' -x '*/.*' -x '*.sql' -x '*wp-content/themes/twenty*' -x '*app/uploads/*' -x '*resources/assets/*' -x '*.lock'
+  
+deploy_development:
+  only:
+    - develop
+    - feature/ci-cd
+  stage: deploy
+  dependencies:
+    - build_development
+  environment:
+    name: development
+    url: https://your.url.com
+  <<: *ssh_set_up
+  script: 
+    - cd $CI_PROJECT_DIR
+    - scp -P ${PORT} ${ZIP_TEMP_FOLDER_NAME}.zip ${SERVER}:${SERVER_ROOT_WHERE_DEPLOY_FOLDER}
+    - set +e
+    - ./deploy.sh
