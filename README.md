@@ -9,6 +9,15 @@ Deploy [Bedrock/Sage](https://roots.io) based Wordpress project to a shared host
 4. make sure you have [Runners](https://docs.gitlab.com/runner/) set up in gitlab
 5. commit & push both files (in root of your project) and watch the script work.
 
+## Understanding the deploy.sh script
+
+For more info about the deploy script, check the script README in this repo (which is a repo for the script if you wish to deploy manually):
+https://github.com/trainoasis/wp-bedrock-sage-bash-deploy
+
+## Want to build & deploy manually from your local machine rather?
+
+See https://github.com/trainoasis/wp-bedrock-sage-bash-deploy
+
 #### Use at your own risk.
 
 In general:
@@ -16,3 +25,4 @@ In general:
 - Always backup 1st
 - Always understand what you are about to do
 - Enjoy
+
