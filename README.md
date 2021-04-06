@@ -1,2 +1,9 @@
-# deploy-wp-bedrock-sage-gitlab-ci
-Deploy Bedrock/Sage based Wordpress project to a shared hosting using Gitlab's CI. 
+# Description
+Deploy Bedrock/Sage based Wordpress project to a shared hosting (or any other that you have ssh access to) using Gitlab's CI. 
+
+## How to use?
+1. edit variables on top of the .gitlab-ci.yml
+2. edit variables on top of the deploy.sh
+3. edit branches to run deployments on ("only:" sections in .gitlab-ci.yml)
+4. make sure you have Runners set up in gitlab
+5. commit & push both files (in root of your project) and watch the script work.
