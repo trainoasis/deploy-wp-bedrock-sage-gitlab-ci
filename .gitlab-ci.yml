@@ -5,36 +5,48 @@ stages:
   - deploy
 
 variables:
-  WP_THEME_PATH: web/app/themes/YOUR_THEME_NAME
-  ZIP_TEMP_FOLDER_NAME: "mesimtablet.com_DEPLOY_TMP"
-  SERVER_ROOT_WHERE_DEPLOY_FOLDER: "/home/your/www/or/whatever"
-  SERVER_ROOT_WHERE_DEPLOY_FOLDER_PROD: "/home/your/www/or"
-  SERVER: "your@server.com"
-  PORT: "5050" 
+  ZIP_TEMP_FOLDER_NAME: develop_DEPLOY_TMP
+  ZIP_TEMP_FOLDER_NAME_STAGING: staging_DEPLOY_TMP
+  ZIP_TEMP_FOLDER_NAME_PROD: prod_DEPLOY_TMP
+  SERVER: user@server.com
+  PORT: 5050
+  SERVER_ROOT_WHERE_DEPLOY_FOLDER_DEV: /home/user/www/subdomains
+  SERVER_FOLDER_NAME_DEV: develop
+  SERVER_ROOT_WHERE_DEPLOY_FOLDER_STAGING: /home/user/www/subdomains
+  SERVER_FOLDER_NAME_STAGING: staging
+  SERVER_ROOT_WHERE_DEPLOY_FOLDER_PROD: /home/user/www
+  SERVER_FOLDER_NAME_PROD: prod_server_folder
+  WP_THEME_PATH: web/app/themes/wp_theme_folder_name
 
-# This is NOT a job and will be ignored by GitLab-CsI
-.init_ssh: &ssh_set_up 
+cache:
+  key: ${CI_COMMIT_REF_SLUG}
+  paths:
+    - .yarn
+    - web/app/themes/wp_theme_folder_name/node_modules
+    - vendor/
+
+#####################################
+# BEFORE_SCRIPTS (anchors only) #####
+#####################################
+
+.init_ssh: &ssh_set_up_commands_only 
   before_script:
-    # SSH
-    - "which ssh-agent || ( apt-get update -y && apt-get install openssh-client -y )"
-    - eval $(ssh-agent -s)
+  # SSH
+  - "which ssh-agent || ( apt-get update -y && apt-get install openssh-client -y )"
+  - eval $(ssh-agent -s)
 
-    ##
-    ## Add the SSH key stored in SSH_PRIVATE_KEY variable to the agent store
-    ## We're using tr to fix line endings which makes ed25519 keys work
-    ## without extra base64 encoding.
-    ## https://gitlab.com/gitlab-examples/ssh-private-key/issues/1#note_48526556
-    ##
-    - ssh-add <(echo "$SSH_PRIVATE_KEY") 
-    - mkdir -p ~/.ssh
-    - chmod 700 ~/.ssh
-    - '[[ -f /.dockerenv ]] && echo -e "Host *\n\tStrictHostKeyChecking no\n\n" > ~/.ssh/config'
-    # Allow deploy script to execute if using one
-    - chmod +x ./deploy-dev.sh
-    - chmod +x ./deploy-production.sh
+  ## Add the SSH key stored in SSH_PRIVATE_KEY variable to the agent store
+  ## We're using tr to fix line endings which makes ed25519 keys work
+  ## without extra base64 encoding.
+  ## https://gitlab.com/gitlab-examples/ssh-private-key/issues/1#note_48526556
+  - ssh-add <(echo "$SSH_PRIVATE_KEY" | base64 -d) # we use base64 decode so weird/chars or empty chars dont cause issues
+  - mkdir -p ~/.ssh
+  - chmod 700 ~/.ssh
+  - '[[ -f /.dockerenv ]] && echo -e "Host *\n\tStrictHostKeyChecking no\n\n" > ~/.ssh/config'
+  # Allow deploy script to execute
+  - chmod +x ./deploy.sh
 
-# This is NOT a job and will be ignored by GitLab-CsI
-.init_build: &init_build 
+.init_build: &before_script_init_build 
   before_script:
   # Updates
   - curl -sL https://deb.nodesource.com/setup_10.x | bash
@@ -53,65 +65,162 @@ variables:
   - php -r "unlink('composer-setup.php');"
   - php -r "unlink('composer-setup.sig');"
 
-  # Install dependencies
+  # Install Node / Yarn
+  #- npm -g install yarn (already available with the docker image)
   - npm rebuild node-sass --force
-  
+
   # SSH
   - "which ssh-agent || ( apt-get update -y && apt-get install openssh-client -y )"
   - eval $(ssh-agent -s)
 
-  ##
-  ## Add the SSH key stored in SSH_PRIVATE_KEY variable to the agent store
-  ## We're using tr to fix line endings which makes ed25519 keys work
-  ## without extra base64 encoding.
-  ## https://gitlab.com/gitlab-examples/ssh-private-key/issues/1#note_48526556
-  ##
-  - ssh-add <(echo "$SSH_PRIVATE_KEY") 
+  - ssh-add <(echo "$SSH_PRIVATE_KEY" | base64 -d) # we use base64 decode so weird/chars or empty chars dont cause issues
   - mkdir -p ~/.ssh
   - chmod 700 ~/.ssh
   - '[[ -f /.dockerenv ]] && echo -e "Host *\n\tStrictHostKeyChecking no\n\n" > ~/.ssh/config'
-  # Allow deploy script to execute if using one
+  # Allow deploy script to execute
   - chmod +x ./deploy.sh
 
-#####################
-#### DEVELOPMENT ####
-#####################
+######################
+# DEVELOP ############
+######################
 
-build_development:
+build_dev:
   stage: build
   only:
-    - develop
-    - feature/ci-cd
+    - /^feature\/.*$/
+  environment:
+    name: develop
+    url: https://develop.yourpage.com
   artifacts:
     paths:
-      - DEPLOY_TMP.zip
-    expire_in: 30 min
-  <<: *init_build
+      - develop_DEPLOY_TMP.zip
+    expire_in: 2 hrs
+  <<: *before_script_init_build
   script:
-    # we run composer here and not on the server because we need private repositories to be accessible with our ssh key
     - composer install --no-ansi --no-dev --no-interaction --optimize-autoloader --no-progress
     - cd ${WP_THEME_PATH}
     - composer install --no-ansi --no-dev --no-interaction --optimize-autoloader --no-progress
-    - yarn
+    - yarn --cache-folder ${CI_PROJECT_DIR}/.yarn
     - yarn build
     - cd $CI_PROJECT_DIR
-    - echo "ZIP our whole folder - skipping non-production files/folders!"
+    - echo "ZIP our deploy folder - skipping non-production files/folders!"
     # skip .cache-loader also or do we need it? make sure to skip hidden files, especially .git etc (huge!)
-    - zip -q -r ${ZIP_TEMP_FOLDER_NAME}.zip . -x '*node_modules*' -x '.*' -x '*/.*' -x '*.sql' -x '*wp-content/themes/twenty*' -x '*app/uploads/*' -x '*resources/assets/*' -x '*.lock'
-  
-deploy_development:
+    # the main problem are huge .git folders in our premium composer packages (WP plugins) that come via cloning. They SHOULD NOT be zipped
+    - zip -q -r ${ZIP_TEMP_FOLDER_NAME}.zip . -x '*.git*' -x '*node_modules*' -x '.*' -x '.*/.*' -x '*.DS_Store' -x '*.sql' -x '*wp-content/themes/twenty*' -x '*app/uploads/*' -x '*resources/assets/*' -x '*.lock'
+
+deploy_dev:
+  stage: deploy
+  cache: {}
+  only:
+    - /^feature\/.*$/
+  environment:
+    name: develop
+    url: https://develop.yourpage.com
+  dependencies:
+    - build_dev
+  before_script: 
+  <<: *ssh_set_up_commands_only
+  script:
+    - cd $CI_PROJECT_DIR
+    - echo "##### => TRANSFER ${ZIP_TEMP_FOLDER_NAME}.zip to ${SERVER}:${SERVER_ROOT_WHERE_DEPLOY_FOLDER_DEV}"
+    - scp -P ${PORT} ${ZIP_TEMP_FOLDER_NAME}.zip ${SERVER}:${SERVER_ROOT_WHERE_DEPLOY_FOLDER_DEV}
+    - set +e
+    - echo "##### => RUN DEPLOY SCRIPT"
+    - ./deploy.sh -z ${ZIP_TEMP_FOLDER_NAME} -s ${SERVER} -p ${PORT} -r "${SERVER_ROOT_WHERE_DEPLOY_FOLDER_DEV}" -n ${SERVER_FOLDER_NAME_DEV} -t ${WP_THEME_PATH}
+
+######################
+# STAGING ############
+######################
+
+build_staging:
+  stage: build
   only:
     - develop
-    - feature/ci-cd
-  stage: deploy
-  dependencies:
-    - build_development
   environment:
-    name: development
-    url: https://your.url.com
-  <<: *ssh_set_up
-  script: 
+    name: staging
+    url: https://staging.yourpage.com
+  artifacts:
+    paths:
+      - staging_DEPLOY_TMP.zip
+    expire_in: 2 hrs
+  <<: *before_script_init_build
+  script:
+    - composer install --no-ansi --no-dev --no-interaction --optimize-autoloader
+    - cd ${WP_THEME_PATH}
+    - composer install --no-ansi --no-dev --no-interaction --optimize-autoloader
+    - yarn --cache-folder ${CI_PROJECT_DIR}/.yarn
+    - yarn build:production
     - cd $CI_PROJECT_DIR
-    - scp -P ${PORT} ${ZIP_TEMP_FOLDER_NAME}.zip ${SERVER}:${SERVER_ROOT_WHERE_DEPLOY_FOLDER}
+    - echo "ZIP our deploy folder - skipping non-production files/folders!"
+    # skip .cache-loader also or do we need it? make sure to skip hidden files, especially .git etc (huge!)
+    - zip -q -r ${ZIP_TEMP_FOLDER_NAME_STAGING}.zip . -x '*.git*' -x '*node_modules*' -x '.*' -x '.*/.*' -x '*.DS_Store' -x '*.sql' -x '*wp-content/themes/twenty*' -x '*app/uploads/*' -x '*resources/assets/*' -x '*.lock'
+
+deploy_staging:
+  stage: deploy
+  cache: {}
+  only:
+    - develop
+  environment:
+    name: staging
+    url: https://staging.yourpage.com
+  dependencies:
+    - build_staging
+  before_script: 
+  <<: *ssh_set_up_commands_only
+  script:
+    - cd $CI_PROJECT_DIR
+    - echo "##### => TRANSFER ${ZIP_TEMP_FOLDER_NAME_STAGING}.zip to ${SERVER}:${SERVER_ROOT_WHERE_DEPLOY_FOLDER_STAGING}"
+    - scp -P ${PORT} ${ZIP_TEMP_FOLDER_NAME_STAGING}.zip ${SERVER}:${SERVER_ROOT_WHERE_DEPLOY_FOLDER_STAGING}
     - set +e
-    - ./deploy.sh
+    - echo "##### => RUN DEPLOY SCRIPT"
+    - ./deploy.sh -z ${ZIP_TEMP_FOLDER_NAME_STAGING} -s ${SERVER} -p ${PORT} -r "${SERVER_ROOT_WHERE_DEPLOY_FOLDER_STAGING}" -n ${SERVER_FOLDER_NAME_STAGING} -t ${WP_THEME_PATH}
+
+######################
+# PRODUCTION #########
+######################
+
+build_production:
+  stage: build
+  only:
+    - master
+  when: manual
+  environment:
+    name: production
+    url: https://www.yourpage.com
+  artifacts:
+    paths:
+      - prod_DEPLOY_TMP.zip
+    expire_in: 2 hrs
+  <<: *before_script_init_build
+  script:
+    - composer install --no-ansi --no-dev --no-interaction --optimize-autoloader --no-progress
+    - cd ${WP_THEME_PATH}
+    - composer install --no-ansi --no-dev --no-interaction --optimize-autoloader --no-progress
+    - yarn --cache-folder ${CI_PROJECT_DIR}/.yarn
+    - yarn lint
+    - yarn build:production
+    - cd $CI_PROJECT_DIR
+    - echo "ZIP our deploy folder - skipping non-production files/folders!"
+    # skip .cache-loader also or do we need it? make sure to skip hidden files, especially .git etc (huge!)
+    - zip -q -r ${ZIP_TEMP_FOLDER_NAME_PROD}.zip . -x '*.git*' -x '*node_modules*' -x '.*' -x '.*/.*' -x '*.DS_Store' -x '*.sql' -x '*wp-content/themes/twenty*' -x '*app/uploads/*' -x '*resources/assets/*' -x '*.lock'
+
+deploy_production:
+  stage: deploy
+  cache: {}
+  only:
+    - master
+  when: manual
+  environment:
+    name: production
+    url: https://www.prod.com
+  dependencies:
+    - build_production
+  before_script: 
+  <<: *ssh_set_up_commands_only
+  script:
+    - cd $CI_PROJECT_DIR
+    - echo "##### => TRANSFER ${ZIP_TEMP_FOLDER_NAME_PROD}.zip to ${SERVER}:${SERVER_ROOT_WHERE_DEPLOY_FOLDER_PROD}"
+    - scp -P ${PORT} ${ZIP_TEMP_FOLDER_NAME_PROD}.zip ${SERVER}:${SERVER_ROOT_WHERE_DEPLOY_FOLDER_PROD}
+    - set +e
+    - echo "##### => RUN DEPLOY SCRIPT"
+    - ./deploy.sh -z ${ZIP_TEMP_FOLDER_NAME_PROD} -s ${SERVER} -p ${PORT} -r "${SERVER_ROOT_WHERE_DEPLOY_FOLDER_PROD}" -n ${SERVER_FOLDER_NAME_PROD} -t ${WP_THEME_PATH}
