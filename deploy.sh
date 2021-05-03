@@ -1,21 +1,34 @@
 #!/bin/bash         
 
-echo "## Deploying to DEVELOP (your.website.com) .."
+# GET SCRIPT PARAMETERS SO THEY ARE DEFINED ONLY IN .gitlab-ci.yml and
+# not duplicated here as well.
+# @see https://unix.stackexchange.com/questions/129391/passing-named-arguments-to-shell-scripts
+while getopts ":s:p:z:r:n:t:" opt; do
+  case $opt in
+    s) SERVER="$OPTARG"
+    ;;
+    p) PORT="$OPTARG"
+    ;;
+	z) ZIP_TEMP_FOLDER_NAME="$OPTARG"
+    ;;
+	r) SERVER_ROOT_WHERE_DEPLOY_FOLDER="$OPTARG"
+    ;;
+	n) SERVER_FOLDER_NAME="$OPTARG"
+    ;;
+	t) WP_THEME_PATH="$OPTARG"
+    ;;
+    \?) echo "Invalid option -$OPTARG" >&2
+    ;;
+  esac
+done
 
-###############################
-##### VARIABLES ###############
-###############################
-
-ZIP_TEMP_FOLDER_NAME="DEPLOY_TMP"
-SERVER="your@server.com"
-PORT="5050"
-SERVER_ROOT_WHERE_DEPLOY_FOLDER="/home/your/www/or/"
-SERVER_FOLDER_NAME="whatever"
-WP_THEME_PATH="web/app/themes/YOUR_THEME_NAME"
-
-###############################
-##### MAIN ####################
-###############################
+echo "#########################################################"
+echo "# DEPLOYING to ${SERVER_FOLDER_NAME} on ${SERVER}:${PORT}"
+echo "# --> zip uploads to:    ${SERVER_ROOT_WHERE_DEPLOY_FOLDER}/${ZIP_TEMP_FOLDER_NAME}.zip"
+echo "# --> deploys to folder: ${SERVER_ROOT_WHERE_DEPLOY_FOLDER}/${SERVER_FOLDER_NAME}"
+echo "# --> WP theme folder:   ${SERVER_ROOT_WHERE_DEPLOY_FOLDER}/${SERVER_FOLDER_NAME}/${WP_THEME_PATH}"
+echo "########################################################"
+echo ""
 
 ssh ${SERVER} -p ${PORT} <<EOT
     set -e;
